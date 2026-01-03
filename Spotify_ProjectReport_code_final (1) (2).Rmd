@@ -1,0 +1,219 @@
+---
+title: "Spotify Music Listening Behavior - Behavioral Clustering & Time Series Analysis"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+packages <- c("tidyverse", "data.table", "lubridate")
+library(tidyverse)
+library(data.table)
+library(lubridate)
+```
+
+```{r}
+library(readr)
+
+spotify <- read_csv("spotify.csv", show_col_types = FALSE)
+head(spotify)
+```
+```{r}
+library(dplyr)
+library(tidyverse)
+
+spotify <- spotify %>% distinct()
+spotify <- spotify %>% drop_na()
+spotify <- spotify %>% mutate(date = as.Date(date))
+spotify <- spotify %>%
+  mutate(
+    year = year(date),
+    month = factor(month(date), levels = 1:12, labels = month.name),
+    covid_period = ifelse(year %in% c(2020, 2021, 2022), "During COVID", "Pre/Post COVID")
+  )
+
+```
+
+```{r}
+country_map <- c(
+  "ad" = "Andorra", "ae" = "United Arab Emirates", "ar" = "Argentina", "at" = "Austria", "au" = "Australia",
+  "be" = "Belgium", "bg" = "Bulgaria", "bo" = "Bolivia", "br" = "Brazil", "by" = "Belarus", "ca" = "Canada",
+  "ch" = "Switzerland", "cl" = "Chile", "co" = "Colombia", "cr" = "Costa Rica", "cy" = "Cyprus", "cz" = "Czech Republic",
+  "de" = "Germany", "dk" = "Denmark", "do" = "Dominican Republic", "ec" = "Ecuador", "ee" = "Estonia",
+  "eg" = "Egypt", "es" = "Spain", "fi" = "Finland", "fr" = "France", "gb" = "United Kingdom", "global" = "Global",
+  "gr" = "Greece", "gt" = "Guatemala", "hk" = "Hong Kong", "hn" = "Honduras", "hu" = "Hungary", "id" = "Indonesia",
+  "ie" = "Ireland", "il" = "Israel", "in" = "India", "is" = "Iceland", "it" = "Italy", "jp" = "Japan", "kr" = "South Korea",
+  "kz" = "Kazakhstan", "lt" = "Lithuania", "lu" = "Luxembourg", "lv" = "Latvia", "ma" = "Morocco", "mt" = "Malta",
+  "mx" = "Mexico", "my" = "Malaysia", "ng" = "Nigeria", "ni" = "Nicaragua", "nl" = "Netherlands", "no" = "Norway",
+  "nz" = "New Zealand", "pa" = "Panama", "pe" = "Peru", "ph" = "Philippines", "pk" = "Pakistan", "pl" = "Poland",
+  "pt" = "Portugal", "py" = "Paraguay", "ro" = "Romania", "ru" = "Russia", "sa" = "Saudi Arabia", "se" = "Sweden",
+  "sg" = "Singapore", "sk" = "Slovakia", "sv" = "El Salvador", "th" = "Thailand", "tr" = "Turkey", "tw" = "Taiwan",
+  "ua" = "Ukraine", "us" = "United States", "uy" = "Uruguay", "ve" = "Venezuela", "vn" = "Vietnam", "za" = "South Africa"
+)
+
+```
+
+```{r}
+spotify <- spotify %>%
+  mutate(country = country_map[country])
+```
+
+
+```{r}
+spotify %>%
+  count(country, sort = TRUE) %>%
+  slice_max(n, n = 10) %>%
+  ggplot(aes(x = reorder(country, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Countries by Number of Track Entries",
+    x = "Country Name",
+    y = "Number of Entries"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r}
+spotify %>%
+  group_by(date) %>%
+  summarise(total_streams = sum(streams), .groups = "drop") %>%
+  ggplot(aes(x = date, y = total_streams)) +
+  geom_line(color = "darkgreen") +
+  labs(
+    title = "Total Spotify Streams Over Time",
+    x = "Date",
+    y = "Total Streams"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+```
+```{r}
+spotify %>%
+  group_by(date) %>%
+  summarise(avg_position = mean(position)) %>%
+  ggplot(aes(x = date, y = avg_position)) +
+  geom_line(color = "tomato") +
+  labs(title = "Average Track Position Over Time", x = "Date", y = "Avg. Chart Position")
+
+```
+
+```{r}
+spotify <- spotify %>%
+  mutate(song_popularity = case_when(
+    position <= 10 ~ "Top 10",
+    position <= 50 ~ "Top 50",
+    TRUE ~ "Others"
+  ))
+head(spotify %>% select(position, song_popularity))
+spotify %>% 
+  count(song_popularity)
+
+spotify %>%
+  count(song_popularity) %>%
+  ggplot(aes(x = song_popularity, y = n, fill = song_popularity)) +
+  geom_col() +
+  labs(title = "Song Popularity Category Distribution", x = "Category", y = "Count")
+```
+```{r}
+pca_data <- spotify %>%
+  select(streams, position) %>%
+  drop_na() %>%
+  scale()  
+pca_result <- prcomp(pca_data, center = TRUE, scale. = TRUE)
+summary(pca_result)
+
+```
+
+
+
+```{r}
+library(ggfortify)
+
+autoplot(pca_result, data = spotify, loadings = TRUE, loadings.label = TRUE,
+         colour = 'song_popularity') +
+  ggtitle("PCA Biplot: Streams vs. Position") +
+  theme_minimal()
+```
+
+
+```{r}
+set.seed(123)
+sample_indices <- sample(nrow(pca_data), 5000)
+sampled_pca_data <- pca_data[sample_indices, ]
+dist_matrix <- dist(sampled_pca_data)
+hc <- hclust(dist_matrix, method = "ward.D2")
+plot(hc, labels = FALSE, main = "Dendrogram - Hierarchical Clustering (Sampled Data)")
+rect.hclust(hc, k = 3, border = "red")
+cluster_labels <- cutree(hc, k = 3)
+cluster_df <- spotify[sample_indices, ] %>%
+  mutate(cluster_hc = factor(cluster_labels))
+
+ggplot(cluster_df, aes(x = streams, y = position, color = cluster_hc)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Hierarchical Clustering (Sampled 5000 Rows)", x = "Streams", y = "Position") +
+  theme_minimal()
+
+```
+
+
+```{r}
+library(forecast)
+monthly_streams <- spotify %>%
+  mutate(month_year = floor_date(date, "month")) %>%
+  group_by(month_year) %>%
+  summarise(total_streams = sum(streams))
+ts_streams <- ts(monthly_streams$total_streams, frequency = 12, start = c(2014, 1))
+fit_arima <- auto.arima(ts_streams)
+summary(fit_arima)
+forecast_arima <- forecast(fit_arima, h = 12)
+autoplot(forecast_arima) +
+  labs(title = "Forecast: Monthly Spotify Streams", x = "Time", y = "Streams")
+
+```
+
+```{r}
+library(changepoint)
+cpt_streams <- cpt.mean(ts_streams, method = "PELT", penalty = "BIC")
+plot(cpt_streams, main = "Change Point Detection in Streams (CUSUM)")
+library(ecp)
+streams_matrix <- as.matrix(ts_streams)
+ecp_result <- e.divisive(streams_matrix, sig.lvl = 0.05)
+plot(ts_streams, type = "l", main = "Change Point Detection (e.divisive)")
+abline(v = ecp_result$estimates, col = "red", lty = 2)
+
+
+```
+
+```{r}
+library(dplyr)
+library(survival)
+library(survminer)
+library(lubridate)
+spotify <- spotify %>%
+  mutate(song_popularity = case_when(
+    position <= 10 ~ "Top 10",
+    position <= 50 ~ "Top 50",
+    TRUE ~ "Others"
+  ))
+track_survival <- spotify %>%
+  group_by(name, song_popularity) %>%
+  summarise(duration = n(), .groups = "drop") %>%
+  mutate(event = 1)  # assume all songs eventually leave the chart
+surv_obj <- Surv(time = track_survival$duration, event = track_survival$event)
+km_fit <- survfit(surv_obj ~ song_popularity, data = track_survival)
+ggsurvplot(km_fit, data = track_survival,
+           pval = TRUE,
+           conf.int = TRUE,
+           risk.table = TRUE,
+           legend.title = "Song Popularity",
+           xlab = "Days on Chart",
+           ylab = "Survival Probability",
+           ggtheme = theme_minimal())
+
+
+```
+
+
